@@ -24,18 +24,15 @@ export default function OrderPDV() {
   const [payments, setPayments] = useState<PaymentEntry[]>([]);
   const [pendingMethod, setPendingMethod] = useState<PaymentMethod>("cash");
   const [pendingAmount, setPendingAmount] = useState("");
-  const [tendered, setTendered] = useState(""); // cash tendered for change
+  const [lastChange, setLastChange] = useState(0);
   const [success, setSuccess] = useState(false);
   const [search, setSearch] = useState("");
-  const [cancelReason, setCancelReason] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
 
   const totalSale = cart.reduce((s, i) => s + i.salePrice * i.quantity, 0);
   const totalCost = cart.reduce((s, i) => s + i.productionCost * i.quantity, 0);
   const totalPaid = payments.reduce((s, p) => s + p.amount, 0);
   const remaining = Math.max(0, totalSale - totalPaid);
-  const cashPayment = payments.find((p) => p.method === "cash");
-  const change = cashPayment ? Math.max(0, cashPayment.amount - (remaining + cashPayment.amount > totalSale ? 0 : remaining)) : 0;
 
   const filteredMenu = menuItems.filter((m) => {
     if (!search) return true;
@@ -116,6 +113,7 @@ export default function OrderPDV() {
 
     logAudit("Pedido registrado", `ID: ${order.id} — ${fmt(totalSale)}`, "order");
 
+    setLastChange(changeAmt);
     setCart([]);
     setPayments([]);
     setPendingAmount("");
@@ -131,10 +129,10 @@ export default function OrderPDV() {
       <div className="flex flex-col items-center justify-center min-h-[70vh] gap-4">
         <CheckCircle size={64} className="text-green-500" />
         <h2 className="text-green-600">Pedido registrado!</h2>
-        {change > 0 && (
+        {lastChange > 0 && (
           <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-700/50 rounded-xl px-8 py-4 text-center">
             <p className="text-sm text-muted-foreground">Troco para o cliente</p>
-            <p className="text-3xl text-green-600">{fmt(change)}</p>
+            <p className="text-3xl text-green-600">{fmt(lastChange)}</p>
           </div>
         )}
         <button onClick={() => setSuccess(false)} className="mt-2 bg-primary text-primary-foreground px-6 py-2 rounded-lg hover:opacity-90">

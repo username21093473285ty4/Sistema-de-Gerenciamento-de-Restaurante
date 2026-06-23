@@ -31,8 +31,15 @@ export default function CashRegister() {
   const previewProfit = previewSale - previewCost;
   const paymentMap: Record<string, number> = {};
   todayOrders.forEach((o) => {
-    const pm = o.paymentMethod || "não informado";
-    paymentMap[pm] = (paymentMap[pm] || 0) + o.totalSale;
+    if (o.payments?.length) {
+      o.payments.forEach((p) => {
+        const k = p.method || "não informado";
+        paymentMap[k] = (paymentMap[k] || 0) + p.amount;
+      });
+    } else {
+      const pm = o.paymentMethod || "não informado";
+      paymentMap[pm] = (paymentMap[pm] || 0) + o.totalSale;
+    }
   });
 
   function handleClose() {

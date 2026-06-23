@@ -94,8 +94,15 @@ export default function Dashboard() {
     const labels: Record<string, string> = { cash: "Dinheiro", card: "Cartão", pix: "PIX", other: "Outro", "": "N/A" };
     const map: Record<string, number> = {};
     filtered.forEach((o) => {
-      const pm = o.paymentMethod || "";
-      map[pm] = (map[pm] || 0) + o.totalSale;
+      if (o.payments?.length) {
+        o.payments.forEach((p) => {
+          const k = p.method || "";
+          map[k] = (map[k] || 0) + p.amount;
+        });
+      } else {
+        const k = o.paymentMethod || "";
+        map[k] = (map[k] || 0) + o.totalSale;
+      }
     });
     return Object.entries(map).map(([k, v]) => ({ name: labels[k] || k, value: parseFloat(v.toFixed(2)) }));
   }, [filtered]);
