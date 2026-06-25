@@ -1,4 +1,4 @@
-import { lazy, memo, Suspense, useMemo, useState } from "react";
+import { Component, lazy, memo, Suspense, useMemo, useState, type ErrorInfo, type ReactNode } from "react";
 import { AuthProvider, useAuth, ROLE_LABELS, ROLE_COLORS } from "./auth";
 import { StoreProvider } from "./store";
 import LoginPage from "./LoginPage";
@@ -19,6 +19,31 @@ const UserManagement = lazy(() => import("./components/UserManagement"));
 
 function PageLoader() {
   return <div className="p-6 text-sm text-muted-foreground">Carregando...</div>;
+}
+
+class PageErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error("Erro ao carregar a tela", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex flex-col items-center justify-center h-full min-h-[50vh] gap-3 px-6 text-center text-muted-foreground">
+          <Shield size={40} className="opacity-30" />
+          <p>Não foi possível carregar esta tela neste momento.</p>
+          <p className="text-sm">Recarregue a página e tente novamente.</p>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 // ── Permission guard ──────────────────────────────────────────────────────
@@ -135,7 +160,11 @@ function PageContent({ page }: { page: Page }) {
     }
   })();
 
-  return <Suspense fallback={<PageLoader />}>{pageContent}</Suspense>;
+  return (
+    <PageErrorBoundary>
+      <Suspense fallback={<PageLoader />}>{pageContent}</Suspense>
+    </PageErrorBoundary>
+  );
 }
 
 // ── Inactivity countdown ──────────────────────────────────────────────────

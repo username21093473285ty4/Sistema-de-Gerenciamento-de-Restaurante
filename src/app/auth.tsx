@@ -124,6 +124,25 @@ const INACTIVITY_MS = 30 * 60 * 1000;
 
 function uid() { return `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`; }
 
+function normalizeSession(raw: unknown): Session | null {
+  if (!raw || typeof raw !== "object") return null;
+  const maybe = raw as Partial<Session> & { role?: Role; permissions?: unknown[]; loginAt?: string };
+  if (!maybe.userId || !maybe.username || !maybe.name || !maybe.role || !maybe.loginAt) return null;
+
+  const permissions = Array.isArray(maybe.permissions)
+    ? maybe.permissions.filter((p): p is Permission => typeof p === "string" && (Object.values(ROLE_PERMISSIONS).flat() as Permission[]).includes(p as Permission))
+    : ROLE_PERMISSIONS[maybe.role] ?? [];
+
+  return {
+    userId: maybe.userId,
+    username: maybe.username,
+    name: maybe.name,
+    role: maybe.role,
+    permissions,
+    loginAt: maybe.loginAt,
+  };
+}
+
 function normalizeUser(user: Partial<AppUser> & { id: string; username: string; name: string; role: Role; passwordHash: string; createdAt: string }): AppUser {
   const active = user.active ?? false;
   const status = user.status ?? (active ? "approved" : "blocked");
@@ -163,6 +182,16 @@ function saveAuthData(d: AuthStoreData) {
   localStorage.setItem(AUTH_KEY, JSON.stringify(d));
 }
 
+function loadSession(): Session | null {
+  try {
+    const raw = sessionStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    return normalizeSession(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
 // ── Context ───────────────────────────────────────────────────────────────
 
 interface AuthContextType {
@@ -186,10 +215,7 @@ const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [data, setData] = useState<AuthStoreData>(loadAuthData);
-  const [session, setSession] = useState<Session | null>(() => {
-    try { return JSON.parse(sessionStorage.getItem(SESSION_KEY) ?? "null"); }
-    catch { return null; }
-  });
+  const [session, setSession] = useState<Session | null>(loadSession);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => { saveAuthData(data); }, [data]);
