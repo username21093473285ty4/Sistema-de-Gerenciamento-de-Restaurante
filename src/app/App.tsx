@@ -1,20 +1,25 @@
-import { useState } from "react";
+import { lazy, memo, Suspense, useMemo, useState } from "react";
 import { AuthProvider, useAuth, ROLE_LABELS, ROLE_COLORS } from "./auth";
 import { StoreProvider } from "./store";
 import LoginPage from "./LoginPage";
-import MenuManager from "./components/MenuManager";
-import OrderPDV from "./components/OrderPDV";
-import OrderHistory from "./components/OrderHistory";
-import Dashboard from "./components/Dashboard";
-import CashRegister from "./components/CashRegister";
-import ExtraCosts from "./components/ExtraCosts";
-import Inventory from "./components/Inventory";
-import Customers from "./components/Customers";
-import AuditLog from "./components/AuditLog";
-import UserManagement from "./components/UserManagement";
 import { ChefHat, Clock, LogOut, Menu, Moon, Shield, Sun, X } from "lucide-react";
 import { GROUP_LABELS, getVisibleNav, type Page } from "./navigation";
 import { useDarkMode } from "./useDarkMode";
+
+const MenuManager = lazy(() => import("./components/MenuManager"));
+const OrderPDV = lazy(() => import("./components/OrderPDV"));
+const OrderHistory = lazy(() => import("./components/OrderHistory"));
+const Dashboard = lazy(() => import("./components/Dashboard"));
+const CashRegister = lazy(() => import("./components/CashRegister"));
+const ExtraCosts = lazy(() => import("./components/ExtraCosts"));
+const Inventory = lazy(() => import("./components/Inventory"));
+const Customers = lazy(() => import("./components/Customers"));
+const AuditLog = lazy(() => import("./components/AuditLog"));
+const UserManagement = lazy(() => import("./components/UserManagement"));
+
+function PageLoader() {
+  return <div className="p-6 text-sm text-muted-foreground">Carregando...</div>;
+}
 
 // ── Permission guard ──────────────────────────────────────────────────────
 
@@ -29,15 +34,14 @@ function Forbidden() {
 
 // ── Sidebar ───────────────────────────────────────────────────────────────
 
-function Sidebar({ current, onChange, open, onClose, dark, onToggleDark }: {
+const Sidebar = memo(function Sidebar({ current, onChange, open, onClose, dark, onToggleDark }: {
   current: Page; onChange: (p: Page) => void;
   open: boolean; onClose: () => void;
   dark: boolean; onToggleDark: () => void;
 }) {
   const { session, can, logout } = useAuth();
-  const visibleNav = getVisibleNav(can);
-
-  const groups = Array.from(new Set(visibleNav.map((n) => n.group)));
+  const visibleNav = useMemo(() => getVisibleNav(can), [can]);
+  const groups = useMemo(() => Array.from(new Set(visibleNav.map((n) => n.group))), [visibleNav]);
 
   return (
     <>
@@ -106,26 +110,32 @@ function Sidebar({ current, onChange, open, onClose, dark, onToggleDark }: {
       </aside>
     </>
   );
-}
+});
 
 // ── Page router ───────────────────────────────────────────────────────────
 
 function PageContent({ page }: { page: Page }) {
   const { can } = useAuth();
-  const item = getVisibleNav(can).find((n) => n.id === page);
+  const item = useMemo(() => getVisibleNav(can).find((n) => n.id === page), [can, page]);
   if (item && !can(item.permission)) return <Forbidden />;
 
-  if (page === "orders")       return <OrderPDV />;
-  if (page === "menu")         return <MenuManager />;
-  if (page === "history")      return <OrderHistory />;
-  if (page === "dashboard")    return <Dashboard />;
-  if (page === "cashregister") return <CashRegister />;
-  if (page === "extracosts")   return <ExtraCosts />;
-  if (page === "inventory")    return <Inventory />;
-  if (page === "customers")    return <Customers />;
-  if (page === "audit")        return <AuditLog />;
-  if (page === "users")        return <UserManagement />;
-  return null;
+  const pageContent = (() => {
+    switch (page) {
+      case "orders": return <OrderPDV />;
+      case "menu": return <MenuManager />;
+      case "history": return <OrderHistory />;
+      case "dashboard": return <Dashboard />;
+      case "cashregister": return <CashRegister />;
+      case "extracosts": return <ExtraCosts />;
+      case "inventory": return <Inventory />;
+      case "customers": return <Customers />;
+      case "audit": return <AuditLog />;
+      case "users": return <UserManagement />;
+      default: return null;
+    }
+  })();
+
+  return <Suspense fallback={<PageLoader />}>{pageContent}</Suspense>;
 }
 
 // ── Inactivity countdown ──────────────────────────────────────────────────
@@ -146,8 +156,8 @@ function AppShell() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [dark, setDark] = useDarkMode();
 
-  const visibleNav = getVisibleNav(can);
-  const mobileNav = visibleNav.slice(0, 5);
+  const visibleNav = useMemo(() => getVisibleNav(can), [can]);
+  const mobileNav = useMemo(() => visibleNav.slice(0, 5), [visibleNav]);
 
   if (!session) return <LoginPage />;
 

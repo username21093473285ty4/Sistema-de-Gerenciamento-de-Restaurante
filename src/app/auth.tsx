@@ -33,6 +33,8 @@ export const ROLE_COLORS: Record<Role, string> = {
   cashier: "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
 };
 
+export type UserStatus = "pending" | "approved" | "blocked";
+
 export interface AppUser {
   id: string;
   username: string;
@@ -40,8 +42,13 @@ export interface AppUser {
   role: Role;
   passwordHash: string;
   active: boolean;
+  status: UserStatus;
   createdAt: string;
   lastLoginAt?: string;
+  createdBy?: string;
+  approvedBy?: string;
+  approvedAt?: string;
+  isMaster?: boolean;
 }
 
 export interface AuditEntry {
@@ -117,10 +124,37 @@ const INACTIVITY_MS = 30 * 60 * 1000;
 
 function uid() { return `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`; }
 
+function normalizeUser(user: Partial<AppUser> & { id: string; username: string; name: string; role: Role; passwordHash: string; createdAt: string }): AppUser {
+  const active = user.active ?? false;
+  const status = user.status ?? (active ? "approved" : "blocked");
+  return {
+    id: user.id,
+    username: user.username,
+    name: user.name,
+    role: user.role,
+    passwordHash: user.passwordHash,
+    active,
+    status,
+    createdAt: user.createdAt,
+    lastLoginAt: user.lastLoginAt,
+    createdBy: user.createdBy,
+    approvedBy: user.approvedBy,
+    approvedAt: user.approvedAt,
+    isMaster: user.isMaster ?? false,
+  };
+}
+
 function loadAuthData(): AuthStoreData {
   try {
     const raw = localStorage.getItem(AUTH_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<AuthStoreData>;
+      return {
+        users: (parsed.users ?? []).map((u: any) => normalizeUser(u)),
+        auditLog: parsed.auditLog ?? [],
+        loginAttempts: parsed.loginAttempts ?? {},
+      };
+    }
   } catch {}
   return { users: [], auditLog: [], loginAttempts: {} };
 }
@@ -143,6 +177,9 @@ interface AuthContextType {
   setupAdmin: (username: string, password: string, name: string) => Promise<void>;
   addUser: (u: { username: string; name: string; role: Role; password: string }) => Promise<void>;
   updateUser: (id: string, data: { name?: string; role?: Role; active?: boolean; password?: string }) => Promise<void>;
+  approveUser: (id: string) => Promise<{ success: boolean; error?: string }>;
+  blockUser: (id: string, reason?: string) => Promise<{ success: boolean; error?: string }>;
+  reactivateUser: (id: string) => Promise<{ success: boolean; error?: string }>;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -192,6 +229,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [session]);
 
+  useEffect(() => {
+    if (!session) return;
+    const currentUser = data.users.find((u) => u.id === session.userId);
+    if (!currentUser || !currentUser.active || currentUser.status === "pending" || currentUser.status === "blocked") {
+      setData((d) => ({
+        ...d,
+        auditLog: [makeAuditEntry(session.userId, session.username, "Sessão encerrada", "Conta não autorizada ou bloqueada", "auth"), ...d.auditLog],
+      }));
+      saveSession(null);
+    }
+  }, [data.users, session]);
+
   function makeAuditEntry(userId: string, username: string, action: string, details: string, category: AuditEntry["category"]): AuditEntry {
     return { id: uid(), timestamp: new Date().toISOString(), userId, username, action, details, category };
   }
@@ -211,9 +260,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return { success: false, error: `Conta bloqueada. Tente em ${min} min.` };
     }
 
-    const user = data.users.find((u) => u.username.toLowerCase() === username.toLowerCase() && u.active);
-    const ok = user ? await verifyPassword(password, user.passwordHash) : false;
+    const user = data.users.find((u) => u.username.toLowerCase() === username.toLowerCase());
+    if (!user) {
+      return { success: false, error: "Usuário ou senha incorretos." };
+    }
 
+    if (user.status === "pending") {
+      return { success: false, error: "Conta pendente de aprovação." };
+    }
+    if (user.status === "blocked" || !user.active) {
+      return { success: false, error: "Conta bloqueada. Contate um administrador." };
+    }
+
+    const ok = await verifyPassword(password, user.passwordHash);
     if (!ok) {
       const prev = data.loginAttempts[username.toLowerCase()] ?? { count: 0 };
       const count = prev.count + 1;
@@ -221,7 +280,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setData((d) => ({
         ...d,
         loginAttempts: { ...d.loginAttempts, [username.toLowerCase()]: { count, lockedUntil } },
-        auditLog: [makeAuditEntry(user?.id ?? "?", username, "Login falhou",
+        auditLog: [makeAuditEntry(user.id, username, "Login falhou",
           lockedUntil ? "Conta bloqueada" : `Tentativa ${count}/${MAX_ATTEMPTS}`, "auth"), ...d.auditLog],
       }));
       if (lockedUntil) return { success: false, error: `Conta bloqueada por ${LOCKOUT_MS / 60000} min.` };
@@ -229,15 +288,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     const sess: Session = {
-      userId: user!.id, username: user!.username, name: user!.name,
-      role: user!.role, permissions: ROLE_PERMISSIONS[user!.role],
+      userId: user.id, username: user.username, name: user.name,
+      role: user.role, permissions: ROLE_PERMISSIONS[user.role],
       loginAt: new Date().toISOString(),
     };
     setData((d) => ({
       ...d,
       loginAttempts: { ...d.loginAttempts, [username.toLowerCase()]: { count: 0 } },
-      users: d.users.map((u) => u.id === user!.id ? { ...u, lastLoginAt: new Date().toISOString() } : u),
-      auditLog: [makeAuditEntry(user!.id, user!.username, "Login realizado", `Nível: ${ROLE_LABELS[user!.role]}`, "auth"), ...d.auditLog],
+      users: d.users.map((u) => u.id === user.id ? { ...u, lastLoginAt: new Date().toISOString() } : u),
+      auditLog: [makeAuditEntry(user.id, user.username, "Login realizado", `Nível: ${ROLE_LABELS[user.role]}`, "auth"), ...d.auditLog],
     }));
     saveSession(sess);
     return { success: true };
@@ -259,21 +318,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function setupAdmin(username: string, password: string, name: string) {
     const hash = await hashPassword(password);
-    const admin: AppUser = { id: uid(), username, name, role: "admin", passwordHash: hash, active: true, createdAt: new Date().toISOString() };
+    const admin: AppUser = {
+      id: uid(), username, name, role: "admin", passwordHash: hash,
+      active: true, status: "approved", createdAt: new Date().toISOString(),
+      isMaster: true,
+    };
     setData((d) => ({
       ...d,
       users: [admin],
-      auditLog: [makeAuditEntry(admin.id, username, "Sistema configurado", "Admin criado na configuração inicial", "system")],
+      auditLog: [makeAuditEntry(admin.id, username, "Sistema configurado", "Administrador Master criado na configuração inicial", "system"), ...d.auditLog],
     }));
   }
 
   async function addUser(u: { username: string; name: string; role: Role; password: string }) {
     const hash = await hashPassword(u.password);
-    const user: AppUser = { id: uid(), username: u.username, name: u.name, role: u.role, passwordHash: hash, active: true, createdAt: new Date().toISOString() };
+    const user: AppUser = {
+      id: uid(), username: u.username, name: u.name, role: u.role, passwordHash: hash,
+      active: false, status: "pending", createdAt: new Date().toISOString(),
+      createdBy: session?.userId ?? "system",
+    };
     setData((d) => ({
       ...d, users: [...d.users, user],
       auditLog: [makeAuditEntry(session?.userId ?? "?", session?.username ?? "?", "Usuário criado",
-        `${u.name} (${u.username}) — ${ROLE_LABELS[u.role]}`, "user"), ...d.auditLog],
+        `${u.name} (${u.username}) — ${ROLE_LABELS[u.role]} aguardando aprovação`, "user"), ...d.auditLog],
     }));
   }
 
@@ -290,8 +357,48 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }));
   }
 
+  async function approveUser(id: string): Promise<{ success: boolean; error?: string }> {
+    const current = data.users.find((u) => u.id === id);
+    if (!current) return { success: false, error: "Usuário não encontrado." };
+    if (current.id === session?.userId) return { success: false, error: "Você não pode aprovar sua própria conta." };
+    if (current.status === "approved" && current.active) return { success: true };
+    setData((d) => ({
+      ...d,
+      users: d.users.map((u) => u.id === id ? { ...u, active: true, status: "approved", approvedBy: session?.userId, approvedAt: new Date().toISOString() } : u),
+      auditLog: [makeAuditEntry(session?.userId ?? "?", session?.username ?? "?", "Usuário aprovado",
+        `${current.name} (${current.username})`, "user"), ...d.auditLog],
+    }));
+    return { success: true };
+  }
+
+  async function blockUser(id: string, reason?: string): Promise<{ success: boolean; error?: string }> {
+    const current = data.users.find((u) => u.id === id);
+    if (!current) return { success: false, error: "Usuário não encontrado." };
+    if (current.id === session?.userId) return { success: false, error: "Você não pode bloquear sua própria conta." };
+    setData((d) => ({
+      ...d,
+      users: d.users.map((u) => u.id === id ? { ...u, active: false, status: "blocked" } : u),
+      auditLog: [makeAuditEntry(session?.userId ?? "?", session?.username ?? "?", "Usuário bloqueado",
+        `${current.name} (${current.username})${reason ? ` — ${reason}` : ""}`, "user"), ...d.auditLog],
+    }));
+    return { success: true };
+  }
+
+  async function reactivateUser(id: string): Promise<{ success: boolean; error?: string }> {
+    const current = data.users.find((u) => u.id === id);
+    if (!current) return { success: false, error: "Usuário não encontrado." };
+    if (current.id === session?.userId) return { success: false, error: "Você não pode reativar sua própria conta." };
+    setData((d) => ({
+      ...d,
+      users: d.users.map((u) => u.id === id ? { ...u, active: true, status: "approved", approvedBy: session?.userId, approvedAt: new Date().toISOString() } : u),
+      auditLog: [makeAuditEntry(session?.userId ?? "?", session?.username ?? "?", "Usuário reativado",
+        `${current.name} (${current.username})`, "user"), ...d.auditLog],
+    }));
+    return { success: true };
+  }
+
   return (
-    <AuthContext.Provider value={{ session, users: data.users, auditLog: data.auditLog, isFirstRun: data.users.length === 0, login, logout, can, logAudit, setupAdmin, addUser, updateUser }}>
+    <AuthContext.Provider value={{ session, users: data.users, auditLog: data.auditLog, isFirstRun: data.users.length === 0, login, logout, can, logAudit, setupAdmin, addUser, updateUser, approveUser, blockUser, reactivateUser }}>
       {children}
     </AuthContext.Provider>
   );

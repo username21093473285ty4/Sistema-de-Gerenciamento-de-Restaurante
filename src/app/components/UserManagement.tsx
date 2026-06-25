@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { useAuth, Role, ROLE_LABELS, ROLE_COLORS, AppUser } from "../auth";
-import { Users, PlusCircle, Pencil, X, Check, ShieldCheck, UserX, UserCheck } from "lucide-react";
+import { useAuth, Role, ROLE_LABELS, ROLE_COLORS, AppUser, type UserStatus } from "../auth";
+import { Users, PlusCircle, Pencil, X, Check, ShieldCheck, UserX, UserCheck, UserCog, Lock, RotateCcw } from "lucide-react";
 
 interface FormState {
   name: string;
@@ -10,20 +10,29 @@ interface FormState {
   active: boolean;
 }
 
-const empty: FormState = { name: "", username: "", role: "cashier", password: "", active: true };
+const empty: FormState = { name: "", username: "", role: "cashier", password: "", active: false };
 
 function fmtDate(iso?: string) {
   if (!iso) return "—";
   return new Date(iso).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
+function statusLabel(status: UserStatus) {
+  switch (status) {
+    case "approved": return "Aprovado";
+    case "blocked": return "Bloqueado";
+    default: return "Pendente";
+  }
+}
+
 export default function UserManagement() {
-  const { users, session, addUser, updateUser, logAudit } = useAuth();
+  const { users, session, addUser, updateUser, approveUser, blockUser, reactivateUser } = useAuth();
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(empty);
   const [errors, setErrors] = useState<Partial<FormState>>({});
   const [loading, setLoading] = useState(false);
+  const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
 
   function validate(isEdit: boolean) {
     const e: Partial<Record<keyof FormState, string>> = {};
@@ -62,7 +71,6 @@ export default function UserManagement() {
         ...(form.password ? { password: form.password } : {}),
       });
     } else {
-      // Check for duplicate username
       if (users.some((u) => u.username.toLowerCase() === form.username.toLowerCase())) {
         setErrors({ username: "Usuário já existe" } as Partial<FormState>);
         setLoading(false);
@@ -73,6 +81,24 @@ export default function UserManagement() {
     setLoading(false);
     setShowForm(false);
     setForm(empty);
+  }
+
+  async function handleApprove(user: AppUser) {
+    setActionLoadingId(user.id);
+    await approveUser(user.id);
+    setActionLoadingId(null);
+  }
+
+  async function handleBlock(user: AppUser) {
+    setActionLoadingId(user.id);
+    await blockUser(user.id, "Bloqueado pelo administrador");
+    setActionLoadingId(null);
+  }
+
+  async function handleReactivate(user: AppUser) {
+    setActionLoadingId(user.id);
+    await reactivateUser(user.id);
+    setActionLoadingId(null);
   }
 
   return (
@@ -121,21 +147,37 @@ export default function UserManagement() {
                       <span className={`text-xs px-2 py-0.5 rounded-full ${ROLE_COLORS[u.role]}`}>{ROLE_LABELS[u.role]}</span>
                     </td>
                     <td className="px-4 py-3">
-                      {u.active ? (
-                        <span className="flex items-center gap-1 text-green-600 text-xs"><UserCheck size={13} /> Ativo</span>
-                      ) : (
-                        <span className="flex items-center gap-1 text-muted-foreground text-xs"><UserX size={13} /> Inativo</span>
-                      )}
+                      <span className={`flex items-center gap-1 text-xs ${u.status === "approved" && u.active ? "text-green-600" : u.status === "blocked" ? "text-red-600" : "text-muted-foreground"}`}>
+                        {u.status === "approved" && u.active ? <UserCheck size={13} /> : u.status === "blocked" ? <UserX size={13} /> : <UserCog size={13} />}
+                        {statusLabel(u.status)}
+                      </span>
                     </td>
                     <td className="px-4 py-3 text-sm text-muted-foreground">{fmtDate(u.lastLoginAt)}</td>
                     <td className="px-4 py-3 text-right">
-                      <button
-                        onClick={() => openEdit(u)}
-                        disabled={u.id === session?.userId && u.role !== "admin"}
-                        className="text-muted-foreground hover:text-primary transition-colors p-1 rounded disabled:opacity-30"
-                      >
-                        <Pencil size={15} />
-                      </button>
+                      <div className="flex items-center justify-end gap-2">
+                        {u.status === "pending" && session?.role === "admin" && u.id !== session?.userId && (
+                          <button onClick={() => handleApprove(u)} disabled={actionLoadingId === u.id} className="text-green-600 hover:text-green-700 transition-colors p-1 rounded disabled:opacity-30" title="Aprovar usuário">
+                            {actionLoadingId === u.id ? <div className="w-4 h-4 border-2 border-green-600/30 border-t-green-600 rounded-full animate-spin" /> : <Check size={15} />}
+                          </button>
+                        )}
+                        {u.status !== "blocked" && u.id !== session?.userId && (
+                          <button onClick={() => handleBlock(u)} disabled={actionLoadingId === u.id} className="text-red-600 hover:text-red-700 transition-colors p-1 rounded disabled:opacity-30" title="Bloquear usuário">
+                            {actionLoadingId === u.id ? <div className="w-4 h-4 border-2 border-red-600/30 border-t-red-600 rounded-full animate-spin" /> : <Lock size={15} />}
+                          </button>
+                        )}
+                        {u.status === "blocked" && u.id !== session?.userId && (
+                          <button onClick={() => handleReactivate(u)} disabled={actionLoadingId === u.id} className="text-amber-600 hover:text-amber-700 transition-colors p-1 rounded disabled:opacity-30" title="Reativar usuário">
+                            {actionLoadingId === u.id ? <div className="w-4 h-4 border-2 border-amber-600/30 border-t-amber-600 rounded-full animate-spin" /> : <RotateCcw size={15} />}
+                          </button>
+                        )}
+                        <button
+                          onClick={() => openEdit(u)}
+                          disabled={u.id === session?.userId && u.role !== "admin"}
+                          className="text-muted-foreground hover:text-primary transition-colors p-1 rounded disabled:opacity-30"
+                        >
+                          <Pencil size={15} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
